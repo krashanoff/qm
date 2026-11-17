@@ -21,6 +21,7 @@ import {
   PRINCIPAL_USER_TENANTS,
 } from "../tenants/lookup.ts";
 import { tenantTables } from "../tenants/migrations.ts";
+import { selfServeTenant, TENANT_EXTERNAL_ORGS } from "../tenants/self-serve.ts";
 import { withTenant } from "../tenants/context.ts";
 
 const PREVIOUS_SCHEMA = "directory/store/0005";
@@ -191,6 +192,7 @@ END $tenants_for_email$`,
       "CREATE INDEX CONCURRENTLY IF NOT EXISTS directory_members_slack_id ON directory_members (org_id, slack_id)",
     ],
   },
+  TENANT_EXTERNAL_ORGS,
 ];
 
 const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;
@@ -399,6 +401,8 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         throw error;
       }
     },
+
+    externalOrgTenant: (issuer, org, defaults) => selfServeTenant({ q }, issuer, org, defaults),
 
     async trustedClientFor(tenant) {
       const [row] = await withTenant(tenant, () =>

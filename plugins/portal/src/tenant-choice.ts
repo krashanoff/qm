@@ -30,6 +30,12 @@ export interface EmailTenants {
   shared: boolean;
 }
 
+export interface ExternalOrg {
+  id: string;
+  name: string;
+  handle?: string;
+}
+
 export interface Workspace {
   tenant: string;
   trustedClient?: { clientId: string; clientSecret: string };
@@ -41,6 +47,7 @@ interface ChoiceClaims {
   trusted?: TrustedSignIn;
   returnTo: string;
   email?: string | null;
+  selfServe?: { subject: string; orgs: ExternalOrg[] };
   exp: number;
 }
 
@@ -192,6 +199,11 @@ function orderWorkspaces(tenants: readonly SignInTenant[], recent: readonly stri
   );
 }
 
+const ORG_OPTION = "org:";
+
+const orgOptions = (orgs: readonly ExternalOrg[]): SignInTenant[] =>
+  orgs.map(({ id, name, handle }) => ({ id: `${ORG_OPTION}${id}`, brandName: name, ...(handle ? { handle } : {}) }));
+
 function workspacePicker(
   tenants: readonly SignInTenant[],
   o: { recent?: readonly string[]; query?: string } = {},
@@ -229,7 +241,7 @@ function workspacePicker(
   };
 }
 
-type Who = Pick<ChoiceClaims, "signIn" | "trusted">;
+type Who = Pick<ChoiceClaims, "signIn" | "trusted" | "selfServe">;
 
 interface CardPage {
   title: string;
@@ -260,6 +272,7 @@ export interface TenantChoiceDeps {
     returnTo: string,
     tenant?: string,
   ) => void | Promise<void>;
+  selfServe?: (who: { subject: string; email: string | null }, org: ExternalOrg) => Promise<string>;
 }
 
 export function createTenantChoice(deps: TenantChoiceDeps) {
@@ -281,7 +294,7 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
   function pickerPage(
     res: ServerResponse,
     tenants: readonly SignInTenant[],
-    o: { recent: readonly string[]; query?: string },
+    o: { recent: readonly string[]; query?: string; orgs?: boolean },
   ): void {
     const picker = workspacePicker(tenants, o);
     deps.sendHtml(
@@ -291,7 +304,9 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
         title: "Choose a workspace",
         heading: "Choose a workspace",
         icon: deps.lockIcon,
-        msg: "Your account belongs to more than one workspace. Pick the one to sign in to.",
+        msg: o.orgs
+          ? "Your account belongs to more than one company. Pick the one to open a workspace for."
+          : "Your account belongs to more than one workspace. Pick the one to sign in to.",
         actions: picker.script ? `${picker.actions}<script>${PICKER_SCRIPT}</script>` : picker.actions,
         help: "To switch later, sign out and sign in again.",
       }),
@@ -317,7 +332,7 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
         secure: deps.secureCookies,
       }),
     ]);
-    pickerPage(res, tenants, { recent: readRecent(req?.headers.cookie) });
+    pickerPage(res, tenants, { recent: readRecent(req?.headers.cookie), orgs: who.selfServe !== undefined });
   }
 
   function settle(
@@ -353,6 +368,8 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
       email: string | null;
       returnTo: string;
       tenant?: string | undefined;
+      subject?: string;
+      orgs?: ExternalOrg[];
     },
   ): Promise<void> {
     const found = await coreSignInTenants(deps.core, deps.signingSecret, {
@@ -361,6 +378,22 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     });
     const who = { sub: identity.sub, name: identity.name };
     const pin = identity.tenant ?? (await deps.pin(identity.returnTo));
+    const orgs = identity.orgs ?? [];
+    if (
+      found.shared &&
+      !found.tenants.length &&
+      pin === undefined &&
+      deps.selfServe &&
+      orgs.length &&
+      identity.subject
+    ) {
+      if (orgs.length === 1) {
+        const tenant = await deps.selfServe({ subject: identity.subject, email: identity.email }, orgs[0]!);
+        return finish(res, { trusted: who }, identity.returnTo, tenant);
+      }
+      const selfServe = { subject: identity.subject, orgs };
+      return offerChoice(req, res, { trusted: who, selfServe }, identity.returnTo, orgOptions(orgs), identity.email);
+    }
     if (found.shared && !found.tenants.length)
       return deps.sendHtml(res, 403, pin === undefined ? deps.noWorkspaceHtml(identity.email) : noAccessHtml());
     await settle(res, { trusted: who }, identity.returnTo, found.tenants, pin, req, identity.email);
@@ -374,10 +407,18 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
   async function choose(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!deps.sameOrigin(req)) return json(res, 403, { error: "forbidden" });
     const choice = openChoice(readCookie(req.headers.cookie, "portal_tenant_choice"), deps.key, Date.now());
-    const tenant = new URLSearchParams(await readBody(req, 4096)).get("tenant") ?? "";
-    if (!choice || !isTenantId(tenant) || (!choice.signIn && !choice.trusted)) return expired(res);
-    const { tenants } = await lookupTenants(choice);
-    if (!tenants.some(({ id }) => id === tenant)) return expired(res);
+    const picked = new URLSearchParams(await readBody(req, 4096)).get("tenant") ?? "";
+    if (!choice || (!choice.signIn && !choice.trusted)) return expired(res);
+    let tenant = picked;
+    if (choice.selfServe && choice.trusted) {
+      const org = choice.selfServe.orgs.find(({ id }) => `${ORG_OPTION}${id}` === picked);
+      if (!org || !deps.selfServe) return expired(res);
+      tenant = await deps.selfServe({ subject: choice.selfServe.subject, email: choice.email ?? null }, org);
+    } else {
+      if (!isTenantId(tenant)) return expired(res);
+      const { tenants } = await lookupTenants(choice);
+      if (!tenants.some(({ id }) => id === tenant)) return expired(res);
+    }
     const recent = [tenant, ...readRecent(req.headers.cookie).filter((id) => id !== tenant)].slice(0, RECENT_MAX);
     res.setHeader("set-cookie", [
       setCookie(RECENT_COOKIE, recent.join("."), {
@@ -392,8 +433,10 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
   async function search(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const choice = openChoice(readCookie(req.headers.cookie, "portal_tenant_choice"), deps.key, Date.now());
     if (!choice || (!choice.signIn && !choice.trusted)) return expired(res);
+    const query = url.searchParams.get("q") ?? "";
+    if (choice.selfServe) return pickerPage(res, orgOptions(choice.selfServe.orgs), { recent: [], query, orgs: true });
     const { tenants } = await lookupTenants(choice);
-    pickerPage(res, tenants, { recent: readRecent(req.headers.cookie), query: url.searchParams.get("q") ?? "" });
+    pickerPage(res, tenants, { recent: readRecent(req.headers.cookie), query });
   }
 
   return { settle, settleTrusted, choose, search };
