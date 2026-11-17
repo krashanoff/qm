@@ -205,7 +205,7 @@ function orderWorkspaces(tenants: readonly SignInTenant[], recent: readonly stri
 }
 
 const ORG_OPTION = "org:";
-const COOKIE_BYTES_MAX = 4096;
+const BROWSER_COOKIE_BYTES_MAX = 4096;
 
 const orgOptions = (orgs: readonly ExternalOrg[]): SignInTenant[] =>
   orgs.map(({ id, name }) => ({ id: `${ORG_OPTION}${id}`, brandName: name }));
@@ -334,13 +334,14 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     let cookie = sealed(who);
     if (who.selfServe) {
       const orgs = [...who.selfServe.orgs];
-      while (orgs.length > 1 && `portal_tenant_choice=${cookie}`.length > COOKIE_BYTES_MAX) {
+      while (orgs.length > 1 && `portal_tenant_choice=${cookie}`.length > BROWSER_COOKIE_BYTES_MAX) {
         orgs.pop();
         cookie = sealed({ ...who, selfServe: { ...who.selfServe, orgs } });
       }
-      if (orgs.length < who.selfServe.orgs.length)
+      const dropped = who.selfServe.orgs.slice(orgs.length).map(({ id }) => id);
+      if (dropped.length)
         console.warn(
-          `[portal] offering ${orgs.length} of ${who.selfServe.orgs.length} organizations to fit the choice cookie`,
+          `[portal] organizations ${dropped.join(", ")} not offered: the choice cookie would exceed ${BROWSER_COOKIE_BYTES_MAX} bytes`,
         );
       tenants = orgOptions(orgs);
     }
