@@ -53,7 +53,8 @@ export async function selfServeWorkspace(
     { purpose: "trusted-self-serve", subject: who.subject, email: who.email, externalOrg },
     fetchImpl,
   );
-  if (!response.ok) throw new Error(`Self-serve workspace failed: HTTP ${response.status}`);
+  if (!response.ok)
+    throw new Error(`Self-serve workspace failed: HTTP ${response.status} ${(await response.text()).slice(0, 500)}`);
   const { tenant } = (await response.json()) as { tenant?: unknown };
   if (!isTenantId(tenant)) throw new Error("Self-serve workspace failed: no workspace returned");
   return tenant;

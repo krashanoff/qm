@@ -403,7 +403,7 @@ import {
   modelSupported,
 } from "./model/pi-models.ts";
 import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
-import { parseSelfServeSettings, type ExternalOrg } from "./tenants/self-serve.ts";
+import type { ExternalOrg } from "./tenants/self-serve.ts";
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
@@ -1853,15 +1853,13 @@ export function buildApp(
       Promise.all(grants.map((g) => users.record({ id: g.principalId, source: "admin", at: Date.now() }))),
   });
   const directory = createPostgresDirectoryStore(databaseUrl);
-  const selfServeDefaults = parseSelfServeSettings(config.selfServeTenantSettings);
   const admin = createAdminService(adminGrantStore, {
     trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
     ...(config.trustedOidcSelfServeIssuer && directory.externalOrgTenant
       ? {
           selfServe: {
             issuer: config.trustedOidcSelfServeIssuer,
-            workspaceFor: (org: ExternalOrg) =>
-              directory.externalOrgTenant!(config.trustedOidcSelfServeIssuer!, org, selfServeDefaults),
+            workspaceFor: (org: ExternalOrg) => directory.externalOrgTenant!(config.trustedOidcSelfServeIssuer!, org),
           },
         }
       : {}),

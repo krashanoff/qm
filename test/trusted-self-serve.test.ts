@@ -19,7 +19,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
-import { parseSelfServeSettings } from "../src/tenants/self-serve.ts";
+import { APP_HANDLE_MAX } from "../plugins/chassis/src/dns-label.ts";
 
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
@@ -31,12 +31,7 @@ function start(databaseUrl: string, enabled = true) {
       databaseUrl,
       dataDir: mkdtempSync(join(tmpdir(), "self-serve-")),
       orgId: "default-org",
-      ...(enabled
-        ? {
-            trustedOidcSelfServeIssuer: issuer,
-            selfServeTenantSettings: JSON.stringify({ modelGatewayKey: "gateway-key", sandboxBackend: "sprites" }),
-          }
-        : {}),
+      ...(enabled ? { trustedOidcSelfServeIssuer: issuer } : {}),
     }),
   );
   const server = createServer(built.app, {
@@ -121,12 +116,7 @@ test("cofounders signing in at once share one new workspace and every one of the
   assert.equal(new Set(tenants).size, 1);
   const [tenant] = tenants as [string];
   const [row] = await db.owner.q("SELECT settings FROM tenants WHERE id = $1", [tenant]);
-  assert.deepEqual(row?.settings, {
-    brandName: "Acme Robotics",
-    handle: "acme",
-    modelGatewayKey: "gateway-key",
-    sandboxBackend: "sprites",
-  });
+  assert.deepEqual(row?.settings, { brandName: "Acme Robotics", handle: "acme" });
   for (const subject of founders) assert.equal(await isAdmin(tenant, subject), true, subject);
   await withoutTenant(async () => {
     assert.deepEqual(await directory.tenantsForPrincipal!(trustedPrincipal(issuer, "founder-2")), [
@@ -149,28 +139,33 @@ test("cofounders signing in at once share one new workspace and every one of the
   assert.deepEqual(await db.app.q("SELECT * FROM tenant_external_orgs"), [], "the app login cannot read the mapping");
 });
 
-test("a taken or invalid handle leaves the new workspace without one, and orgs from another issuer stay apart", async (t) => {
+test("a workspace handle comes from the provider's handle, made valid and unique, and never blocks sign-in", async (t) => {
   const { db, s } = await shared(t);
   const [alpha] = db.tenants;
-  await db.owner.q(`UPDATE tenants SET settings = '{"handle":"taken"}' WHERE id = $1`, [alpha]);
+  await db.owner.q(`UPDATE tenants SET settings = '{"handle":"acmeai"}' WHERE id = $1`, [alpha]);
   const create = (id: string, handle?: string) =>
     withoutTenant(() =>
       selfServeWorkspace(
         s.config,
         { subject: `s-${id}`, email: null },
-        { id, name: `Org ${id}`, ...(handle ? { handle } : {}) },
+        { id, name: `Org ${id}`, ...(handle === undefined ? {} : { handle }) },
       ),
     );
   const handleOf = async (tenant: string) =>
     (await db.owner.q("SELECT settings->>'handle' AS h FROM tenants WHERE id = $1", [tenant]))[0]?.h ?? null;
-  assert.equal(await handleOf(await create("a", "taken")), null);
-  assert.equal(await handleOf(await create("b", "Not A Handle!")), null);
-  assert.equal(await handleOf(await create("c", "admin")), null);
-  assert.equal(await handleOf(await create("d")), null);
-  await db.owner.q("INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ('https://other.test', 'e', $1)", [
+  assert.equal(await handleOf(await create("a", "acme-ai")), "acmeai2");
+  assert.equal(await handleOf(await create("b", "Acme AI!")), "acmeai3");
+  assert.equal(await handleOf(await create("c", "admin")), "admin2");
+  assert.equal(await handleOf(await create("d", "x")), "x2");
+  const long = "y".repeat(APP_HANDLE_MAX + 5);
+  assert.equal(await handleOf(await create("e", long)), "y".repeat(APP_HANDLE_MAX));
+  assert.equal(await handleOf(await create("f", long)), `${"y".repeat(APP_HANDLE_MAX - 1)}2`);
+  assert.equal(await handleOf(await create("g", "---")), null);
+  assert.equal(await handleOf(await create("h")), null);
+  await db.owner.q("INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ('https://other.test', 'i', $1)", [
     alpha,
   ]);
-  assert.notEqual(await create("e"), alpha);
+  assert.notEqual(await create("i"), alpha);
 });
 
 test("self-serve rejects forged, unrelated, expired and replayed assertions, and is off unless configured", async (t) => {
@@ -227,12 +222,4 @@ test("a deployment with a boot tenant never self-serves another workspace", asyn
   const s = start(db.appDatabaseUrl);
   t.after(s.close);
   assert.equal((await send(s.base, claims({ externalOrg: { id: "boot", name: "Boot" } }))).status, 403);
-});
-
-test("self-serve defaults cannot set a workspace's identity", () => {
-  assert.deepEqual(parseSelfServeSettings(undefined), {});
-  assert.deepEqual(parseSelfServeSettings('{"sandboxBackend":"modal"}'), { sandboxBackend: "modal" });
-  assert.throws(() => parseSelfServeSettings('{"handle":"x1"}'), /may not set handle/);
-  assert.throws(() => parseSelfServeSettings('{"serving":false}'), /may not set serving/);
-  assert.throws(() => parseSelfServeSettings('{"nope":1}'));
 });

@@ -28,6 +28,7 @@ export interface TrustedSignIn {
 export interface EmailTenants {
   tenants: SignInTenant[];
   shared: boolean;
+  selfServe?: boolean;
 }
 
 export interface ExternalOrg {
@@ -86,7 +87,11 @@ async function coreSignInTenants(
   const tenants = new Map<string, SignInTenant>();
   for (const tenant of [...(byEmail?.tenants ?? []), ...byPrincipal.tenants])
     if (!tenants.has(tenant.id)) tenants.set(tenant.id, tenant);
-  return { tenants: [...tenants.values()], shared: byPrincipal.shared || byEmail?.shared === true };
+  return {
+    tenants: [...tenants.values()],
+    shared: byPrincipal.shared || byEmail?.shared === true,
+    selfServe: byPrincipal.selfServe === true,
+  };
 }
 
 async function coreTenants(
@@ -100,7 +105,7 @@ async function coreTenants(
     signal: AbortSignal.timeout(4_000),
   });
   if (!r.ok) throw new Error(`workspace lookup failed: HTTP ${r.status}`);
-  const body = (await r.json()) as { tenants?: unknown; shared?: unknown };
+  const body = (await r.json()) as { tenants?: unknown; shared?: unknown; selfServe?: unknown };
   const tenants = Array.isArray(body.tenants) ? body.tenants : [];
   const valid = tenants.flatMap((t: { id?: unknown; brandName?: unknown; handle?: unknown }) =>
     isTenantId(t?.id)
@@ -113,7 +118,7 @@ async function coreTenants(
         ]
       : [],
   );
-  return { tenants: valid, shared: body.shared === true };
+  return { tenants: valid, shared: body.shared === true, selfServe: body.selfServe === true };
 }
 
 export function coreWorkspace(coreApiUrl: string, signingSecret: string | undefined) {
@@ -202,7 +207,7 @@ function orderWorkspaces(tenants: readonly SignInTenant[], recent: readonly stri
 const ORG_OPTION = "org:";
 
 const orgOptions = (orgs: readonly ExternalOrg[]): SignInTenant[] =>
-  orgs.map(({ id, name, handle }) => ({ id: `${ORG_OPTION}${id}`, brandName: name, ...(handle ? { handle } : {}) }));
+  orgs.map(({ id, name }) => ({ id: `${ORG_OPTION}${id}`, brandName: name }));
 
 function workspacePicker(
   tenants: readonly SignInTenant[],
@@ -380,7 +385,7 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     const pin = identity.tenant ?? (await deps.pin(identity.returnTo));
     const orgs = identity.orgs ?? [];
     if (
-      found.shared &&
+      found.selfServe &&
       !found.tenants.length &&
       pin === undefined &&
       deps.selfServe &&

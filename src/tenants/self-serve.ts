@@ -1,41 +1,21 @@
 import { z } from "zod";
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
-import { isAppHandleShape } from "../../plugins/chassis/src/dns-label.ts";
-import { tenantSettingsSchema, type TenantSettings } from "./settings.ts";
+import { APP_HANDLE_MAX } from "../../plugins/chassis/src/dns-label.ts";
 
 export const externalOrgSchema = z
   .object({
     id: z.string().min(1).max(200),
     name: z.string().trim().min(1).max(200),
-    handle: z.string().trim().toLowerCase().max(63).optional(),
+    handle: z.string().max(200).optional(),
   })
   .strip();
 
 export type ExternalOrg = z.infer<typeof externalOrgSchema>;
 
-const IDENTITY_KEYS = [
-  "brandName",
-  "handle",
-  "orgSlug",
-  "oidcClient",
-  "allowedEmails",
-  "slackBridgeToken",
-  "partnerChatAccount",
-  "serving",
-] as const;
-
-export function parseSelfServeSettings(raw: string | undefined): TenantSettings {
-  if (!raw) return {};
-  const parsed = tenantSettingsSchema.parse(JSON.parse(raw));
-  const identity = IDENTITY_KEYS.filter((key) => parsed[key] !== undefined);
-  if (identity.length) throw new Error(`self-serve tenant defaults may not set ${identity.join(", ")}`);
-  return parsed;
-}
-
-const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, org text, brand text, handle text, defaults jsonb)
+const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, org text, brand text, handle text)
   RETURNS TABLE(tenant uuid, created boolean) LANGUAGE plpgsql VOLATILE SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
-  DECLARE found uuid;
+  DECLARE found uuid; base text; candidate text; n int := 1;
   BEGIN
     PERFORM pg_advisory_xact_lock(hashtextextended('qm-self-serve:' || $1 || chr(10) || $2, 0));
     SELECT o.tenant INTO found FROM tenant_external_orgs o WHERE o.issuer = $1 AND o.org_id = $2;
@@ -43,14 +23,20 @@ const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, or
       RETURN QUERY SELECT found, false;
       RETURN;
     END IF;
-    INSERT INTO tenants(settings) VALUES (coalesce($5, '{}'::jsonb) || jsonb_build_object('brandName', $3))
+    INSERT INTO tenants(settings) VALUES (jsonb_build_object('brandName', $3))
       RETURNING id INTO found;
-    IF $4 IS NOT NULL AND qm_tenant_handle(jsonb_build_object('handle', $4)) IS NOT DISTINCT FROM $4 THEN
-      BEGIN
-        UPDATE tenants SET settings = settings || jsonb_build_object('handle', $4) WHERE id = found;
-      EXCEPTION WHEN unique_violation THEN NULL;
-      END;
-    END IF;
+    base := left(regexp_replace(lower(coalesce($4, '')), '[^a-z0-9]', '', 'g'), ${APP_HANDLE_MAX});
+    WHILE base <> '' LOOP
+      candidate := CASE WHEN n = 1 THEN base ELSE left(base, ${APP_HANDLE_MAX} - length(n::text)) || n END;
+      IF qm_tenant_handle(jsonb_build_object('handle', candidate)) IS NOT DISTINCT FROM candidate THEN
+        BEGIN
+          UPDATE tenants SET settings = settings || jsonb_build_object('handle', candidate) WHERE id = found;
+          EXIT;
+        EXCEPTION WHEN unique_violation THEN NULL;
+        END;
+      END IF;
+      n := n + 1;
+    END LOOP;
     INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ($1, $2, found);
     RETURN QUERY SELECT found, true;
   END $f$`;
@@ -75,13 +61,13 @@ export async function selfServeTenant(
   pg: Pick<PgPool, "q">,
   issuer: string,
   org: ExternalOrg,
-  defaults: TenantSettings,
 ): Promise<{ tenant: string; created: boolean }> {
-  const handle = org.handle && isAppHandleShape(org.handle) ? org.handle : null;
-  const rows = await pg.q(
-    "SELECT tenant::text AS tenant, created FROM qm_self_serve_tenant($1, $2, $3, $4, $5::jsonb)",
-    [issuer, org.id, org.name, handle, JSON.stringify(defaults)],
-  );
+  const rows = await pg.q("SELECT tenant::text AS tenant, created FROM qm_self_serve_tenant($1, $2, $3, $4)", [
+    issuer,
+    org.id,
+    org.name,
+    org.handle ?? null,
+  ]);
   const row = rows[0];
   if (typeof row?.tenant !== "string") throw new Error("self-serve tenant was not created");
   return { tenant: row.tenant, created: row.created === true };

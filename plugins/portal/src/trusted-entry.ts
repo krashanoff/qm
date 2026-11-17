@@ -40,8 +40,8 @@ export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): O
   };
 }
 
-const ORGS_MAX = 8;
-const ORG_TEXT_MAX = 100;
+const ORGS_IN_CHOICE_COOKIE = 4;
+const ORG_TEXT_MAX = 200;
 
 function orgText(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -52,10 +52,10 @@ function orgText(value: unknown): string | undefined {
 function trustedOrgs(...sources: Record<string, unknown>[]): ExternalOrg[] {
   const raw = sources.map((source) => source.orgs).find(Array.isArray) as unknown[] | undefined;
   const orgs = new Map<string, ExternalOrg>();
-  for (const entry of (raw ?? []).slice(0, ORGS_MAX)) {
+  for (const entry of (raw ?? []).slice(0, ORGS_IN_CHOICE_COOKIE)) {
     if (!entry || typeof entry !== "object") continue;
     const { id, name, handle } = entry as Record<string, unknown>;
-    const org = { id: orgText(id), name: orgText(name), handle: orgText(handle)?.toLowerCase() };
+    const org = { id: orgText(id), name: orgText(name), handle: orgText(handle) };
     if (!org.id || !org.name || orgs.has(org.id)) continue;
     orgs.set(org.id, { id: org.id, name: org.name, ...(org.handle ? { handle: org.handle } : {}) });
   }

@@ -26,6 +26,7 @@ let principalTenants: unknown[] = [];
 let canonicalStatus = 200;
 let admitted = true;
 let orgs: unknown = undefined;
+let selfServe = false;
 const selfServed: Array<Record<string, unknown>> = [];
 const orgTenants: Record<string, string> = {};
 const principalLookups: string[] = [];
@@ -79,7 +80,7 @@ const upstream = createServer((req, res) => {
     }
     if (path === "/v1/auth/broker/principal-tenants") {
       principalLookups.push(new URL(req.url!, origin).searchParams.get("principal") ?? "");
-      return void res.end(JSON.stringify({ tenants: principalTenants, shared }));
+      return void res.end(JSON.stringify({ tenants: principalTenants, shared, selfServe }));
     }
     if (path === "/v1/auth/broker/claim") {
       let raw = "";
@@ -151,7 +152,6 @@ Object.assign(process.env, {
     clientId: "trusted-client",
   }),
   PORTAL_TRUSTED_OIDC_CLIENT_SECRET: "trusted-client-secret-0123456789abcdef",
-  PORTAL_TRUSTED_OIDC_SELF_SERVE: "1",
 });
 const { server } = await import("../src/index.ts");
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -365,6 +365,7 @@ test("a trusted founder with no workspace opens or joins their company's, and pi
   principalTenants = [];
   selfServed.length = 0;
   Object.assign(orgTenants, { "42": alpha, "43": beta });
+  selfServe = true;
   const principal = trustedPrincipal(upstreamUrl, "idp-subject");
   try {
     orgs = [{ id: "42", name: "Acme", handle: "Acme" }, { id: "" }, "junk"];
@@ -376,7 +377,7 @@ test("a trusted founder with no workspace opens or joins their company's, and pi
       [selfServed[0]!.purpose, selfServed[0]!.issuer, selfServed[0]!.subject, selfServed[0]!.email, selfServed[0]!.org],
       ["trusted-self-serve", upstreamUrl, "idp-subject", "founder@acme.test", "org:acme"],
     );
-    assert.deepEqual(selfServed[0]!.externalOrg, { id: "42", name: "Acme", handle: "acme" });
+    assert.deepEqual(selfServed[0]!.externalOrg, { id: "42", name: "Acme", handle: "Acme" });
 
     orgs = [
       { id: "42", name: "Acme" },
@@ -409,8 +410,15 @@ test("a trusted founder with no workspace opens or joins their company's, and pi
     assert.equal(staff.status, 403);
     assert.match(await staff.text(), /No QM workspace for this account yet/);
     assert.equal(selfServed.length, 0);
+
+    orgs = [{ id: "42", name: "Acme" }];
+    selfServe = false;
+    const off = await trustedCallback("founder@acme.test");
+    assert.equal(off.status, 403, "with self-serve off in core the founder still gets the no-workspace page");
+    assert.equal(selfServed.length, 0);
   } finally {
     orgs = undefined;
+    selfServe = false;
   }
 });
 

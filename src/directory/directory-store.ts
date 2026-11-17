@@ -1,5 +1,4 @@
 import type { ExternalOrg } from "../tenants/self-serve.ts";
-import type { TenantSettings } from "../tenants/settings.ts";
 import type { PrincipalType } from "../types.ts";
 
 export interface DirectoryMember {
@@ -104,11 +103,7 @@ export interface DirectoryStore {
   setAppHandle?(handle: string): Promise<"ok" | "taken">;
   tenantForAppHandle?(handle: string): Promise<string | undefined>;
   trustedClientFor?(tenant: string): Promise<{ clientId: string; clientSecret: string } | undefined>;
-  externalOrgTenant?(
-    issuer: string,
-    org: ExternalOrg,
-    defaults: TenantSettings,
-  ): Promise<{ tenant: string; created: boolean }>;
+  externalOrgTenant?(issuer: string, org: ExternalOrg): Promise<{ tenant: string; created: boolean }>;
 }
 
 export const MAX_CANDIDATES = 10;

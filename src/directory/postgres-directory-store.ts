@@ -402,7 +402,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       }
     },
 
-    externalOrgTenant: (issuer, org, defaults) => selfServeTenant({ q }, issuer, org, defaults),
+    externalOrgTenant: (issuer, org) => selfServeTenant({ q }, issuer, org),
 
     async trustedClientFor(tenant) {
       const [row] = await withTenant(tenant, () =>

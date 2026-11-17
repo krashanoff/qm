@@ -7,7 +7,6 @@ import { personKey, samePerson } from "../directory/person.ts";
 import type { UserStore } from "../identity/user-store.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { bootTenant } from "../tenants/boot.ts";
-import { inTenant } from "../tenants/claim.ts";
 import type { ExternalOrg } from "../tenants/self-serve.ts";
 import { PrincipalLinkError } from "../identity/principal-links.ts";
 
@@ -47,12 +46,14 @@ export interface AdminService {
     issuer: string,
     subject: string,
   ): Promise<{ grant: AdminGrant; created: boolean }>;
+  selfServeEnabled?: boolean;
+  selfServeWorkspace(issuer: string, subject: string, org: ExternalOrg): Promise<{ tenant: string; created: boolean }>;
   provisionSelfServe(
+    tenant: Tenant,
     issuer: string,
     subject: string,
-    org: ExternalOrg,
     email: string | null,
-  ): Promise<{ tenant: string; created: boolean; grant: AdminGrant; granted: boolean }>;
+  ): Promise<{ grant: AdminGrant; granted: boolean }>;
   createGrant(
     tenant: Tenant,
     actor: Principal,
@@ -104,6 +105,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
 
   return {
     users: opts.users,
+    selfServeEnabled: opts.selfServe !== undefined,
     resolveActor(header) {
       if (!header) return null;
       const at = header.lastIndexOf("@");
@@ -138,41 +140,45 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       const created = await grants.addIfAbsent(tenant, grant);
       return { grant, created };
     },
-    async provisionSelfServe(issuer, subject, org, email) {
+    async selfServeWorkspace(issuer, subject, org) {
       const selfServe = opts.selfServe;
       if (!selfServe || issuer !== selfServe.issuer)
         throw new AdminError(403, "self-serve workspaces are not enabled for this issuer");
       if (bootTenant() !== undefined) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
+      trustedSubjectPrincipal(issuer, subject);
+      return selfServe.workspaceFor(org);
+    },
+    async provisionSelfServe(tenant, issuer, subject, email) {
+      if (!opts.selfServe || issuer !== opts.selfServe.issuer)
+        throw new AdminError(403, "self-serve workspaces are not enabled for this issuer");
       const principalId = trustedSubjectPrincipal(issuer, subject);
-      const { tenant, created } = await selfServe.workspaceFor(org);
-      return inTenant(tenant, async (bound) => {
-        const known = await opts.users.resolve(email ? [principalId, email] : [principalId]);
-        if ([...known.values()].some((user) => user.offboardedAt !== undefined))
-          throw new AdminError(403, "this person was removed from the workspace");
-        const at = now();
-        await opts.users.record({ id: principalId, source: "admin", at });
-        if (email)
-          await opts.users
-            .link({
-              principalId: email,
-              canonicalId: principalId,
-              evidence: `verified email from ${issuer}`,
-              linkedBy: "",
-              createdAt: at,
-            })
-            .catch((error: unknown) => {
-              if (!(error instanceof PrincipalLinkError)) throw error;
-            });
-        const grant: AdminGrant = {
-          principalId,
-          role: "org_admin",
-          scopeId: scopeId("org", orgId),
-          grantedBy: `trusted-oidc-self-serve:${issuer}`,
-          createdAt: at,
-        };
-        const granted = await grants.addIfAbsent(bound, grant);
-        return { tenant, created, grant, granted };
-      });
+      const known = await opts.users.resolve(email ? [principalId, email] : [principalId]);
+      if ([...known.values()].some((user) => user.offboardedAt !== undefined))
+        throw new AdminError(403, "this person was removed from the workspace");
+      const at = now();
+      await opts.users.record({ id: principalId, source: "admin", at });
+      if (email)
+        await opts.users
+          .link({
+            principalId: email,
+            canonicalId: principalId,
+            evidence: `verified email from ${issuer}`,
+            linkedBy: "",
+            createdAt: at,
+          })
+          .catch((error: unknown) => {
+            if (!(error instanceof PrincipalLinkError)) throw error;
+            console.warn(`[self-serve] email not linked to ${principalId} in ${tenant.id}: ${error.message}`);
+          });
+      const grant: AdminGrant = {
+        principalId,
+        role: "org_admin",
+        scopeId: scopeId("org", orgId),
+        grantedBy: `trusted-oidc-self-serve:${issuer}`,
+        createdAt: at,
+      };
+      const granted = await grants.addIfAbsent(tenant, grant);
+      return { grant, granted };
     },
     async listGrants(tenant) {
       return grants.list(tenant);

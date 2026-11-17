@@ -230,26 +230,16 @@ const tmpKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.tmp.v1");
 const impersonateKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.impersonate.v1");
 const trustedOidc = trustedEntryConfig(process.env, PUBLIC_URL);
 const trustedSignInLabel = trustedOidc ? process.env.PORTAL_TRUSTED_OIDC_LABEL?.trim() || undefined : undefined;
+const trustedAssertions = Boolean(
+  trustedOidc &&
+  CORE_SIGNING_SECRET &&
+  PORTAL_IDENTITY_SECRET &&
+  PORTAL_IDENTITY_SECRET.length >= 32 &&
+  PORTAL_IDENTITY_SECRET !== CORE_SIGNING_SECRET,
+);
 const trustedAdminEnabled = process.env.PORTAL_TRUSTED_OIDC_ADMIN === "1";
-if (
-  trustedAdminEnabled &&
-  (!trustedOidc ||
-    !CORE_SIGNING_SECRET ||
-    !PORTAL_IDENTITY_SECRET ||
-    PORTAL_IDENTITY_SECRET.length < 32 ||
-    PORTAL_IDENTITY_SECRET === CORE_SIGNING_SECRET)
-)
+if (trustedAdminEnabled && !trustedAssertions)
   throw new Error("Trusted administrator provisioning requires trusted OIDC and a distinct portal identity secret");
-const trustedSelfServeEnabled = process.env.PORTAL_TRUSTED_OIDC_SELF_SERVE === "1";
-if (
-  trustedSelfServeEnabled &&
-  (!trustedOidc ||
-    !CORE_SIGNING_SECRET ||
-    !PORTAL_IDENTITY_SECRET ||
-    PORTAL_IDENTITY_SECRET.length < 32 ||
-    PORTAL_IDENTITY_SECRET === CORE_SIGNING_SECRET)
-)
-  throw new Error("Trusted self-serve workspaces require trusted OIDC and a distinct portal identity secret");
 const claimTrusted = (key: string, expiresAt: number) =>
   claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), key, expiresAt);
 const trustedEntry = trustedOidc ? createTrustedEntry(trustedOidc, SESSION_SECRET ?? DEV_SECRET, claimTrusted) : null;
@@ -1439,7 +1429,7 @@ const tenantChoice = createTenantChoice({
     sendHtml(res, status, html, scriptHash ? `${PAGE_CSP}; script-src '${scriptHash}'` : PAGE_CSP),
   finishSignIn,
   finishTrustedSignIn,
-  ...(trustedSelfServeEnabled
+  ...(trustedAssertions
     ? {
         selfServe: async (who: { subject: string; email: string | null }, org: ExternalOrg) => {
           const tenant = await selfServeWorkspace(

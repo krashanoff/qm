@@ -74,26 +74,26 @@ grants but does not remove existing ones. Company login and Slack integration re
 existing configuration. Deployment CLI secret wiring, account linking, and live
 qualification are pending; this is not a released deployment feature.
 
-Self-serve workspaces are off by default. On a multitenant deployment, set
-`PORTAL_TRUSTED_OIDC_SELF_SERVE=1` on portal and core's `TRUSTED_OIDC_SELF_SERVE_ISSUER`
-to the exact trusted issuer; this also requires a distinct `PORTAL_IDENTITY_SECRET` and
-durable replay storage. The trusted provider may then return an `orgs` claim in userinfo
-(or the ID token): an array of `{ "id": string, "name": string, "handle"?: string }`
-naming the organizations the person may open a workspace for. When a trusted sign-in
-finds no workspace for the person and carries organizations, portal submits a
-short-lived, single-use, purpose-bound assertion for the chosen organization; with one
-organization it is chosen automatically, with several the workspace picker lists them.
-Core creates the organization's workspace on first use, keyed by issuer and organization
-id so concurrent sign-ins share one workspace, or joins the existing one, then records
-the person (and links their verified email) and grants them organization admin. Every
-person who joins this way is an admin. The name becomes the workspace brand; the handle
-is used only when it is valid and free, and is never part of the key. A person an admin
-removed from the workspace is refused. Core's optional `TRUSTED_OIDC_SELF_SERVE_SETTINGS`
-holds JSON tenant settings copied into each new workspace (for example a model gateway
-key or sandbox backend); it may not set brand, handle, org slug, sign-in, Slack or
-serving settings. A deployment with a boot tenant never self-serves.
+Self-serve workspaces are off by default. On a multitenant deployment, set core's
+`TRUSTED_OIDC_SELF_SERVE_ISSUER` to the exact trusted issuer; this also requires a
+distinct `PORTAL_IDENTITY_SECRET` and durable replay storage. Core then reports
+self-serve as available in its sign-in lookups, and the trusted provider may return an
+`orgs` claim in userinfo (or the ID token): an array of
+`{ "id": string, "name": string, "handle"?: string }` naming the organizations the person
+may open a workspace for. When a trusted sign-in finds no workspace for the person and
+carries organizations, portal submits a short-lived, single-use, purpose-bound assertion
+for the chosen organization; with one organization it is chosen automatically, with
+several the workspace picker lists them. Core creates the organization's workspace on
+first use, keyed by issuer and organization id so concurrent sign-ins share one
+workspace, or joins the existing one, then records the person (and links their verified
+email) and grants them organization admin. Every person who joins this way is an admin.
+The name becomes the workspace brand; the handle is used only when it is valid and free,
+and is never part of the key. A person an admin removed from the workspace is refused. A
+new workspace has no tenant settings of its own, so it uses the deployment's model
+gateway key and sandbox credentials until an operator sets per-workspace values. A
+deployment with a boot tenant never self-serves.
 
-successful trusted sign-in
+When `PORTAL_TRUSTED_OIDC_LABEL` is explicitly set, successful trusted sign-in
 makes the portal remember the configured issuer in a
 host-only, HttpOnly browser preference for one year. Ordinary
 `/auth/login` requests then return to the trusted route, including after logout
