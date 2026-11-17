@@ -398,6 +398,12 @@ test("a trusted founder with no workspace opens or joins their company's, and pi
     const searched = await fetch(`${base}/auth/tenant?q=beta`, { headers: { cookie } });
     assert.match(await searched.text(), /Beta Labs/);
 
+    orgs = Array.from({ length: 40 }, (_, i) => ({ id: `${i}`, name: `Company ${i} ${"x".repeat(200)}` }));
+    const many = await trustedCallback("founder@acme.test");
+    const kept = (await many.text()).match(/name="tenant" value="org:/g)?.length ?? 0;
+    assert.ok(kept > 1 && kept < 40, `${kept} organizations offered`);
+    assert.ok(cookieFrom(many, "portal_tenant_choice")!.length <= 4096);
+
     tenants = [{ id: beta, brandName: "Beta Labs" }];
     selfServed.length = 0;
     const member = await trustedCallback("founder@acme.test");

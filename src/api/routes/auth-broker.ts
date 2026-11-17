@@ -290,9 +290,10 @@ async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
     const admin = deps.admin;
     const { tenant, created } = await admin.selfServeWorkspace(claims.issuer, claims.subject, org.data);
     await withTenant(tenant, async (bound) => {
+      const by = { principalId: `trusted-oidc-self-serve:${claims.issuer}`, scopeLabel: orgScope() };
+      if (created) audit({ deps, tenant: bound }, { ...by, action: "tenant.self_serve.create", resource: tenant });
       const { grant, granted } = await admin.provisionSelfServe(bound, claims.issuer, claims.subject, email);
       const event = { principalId: grant.grantedBy!, scopeLabel: grant.scopeId };
-      if (created) audit({ deps, tenant: bound }, { ...event, action: "tenant.self_serve.create", resource: tenant });
       if (granted)
         audit(
           { deps, tenant: bound },

@@ -4,9 +4,9 @@ import { APP_HANDLE_MAX } from "../../plugins/chassis/src/dns-label.ts";
 
 export const externalOrgSchema = z
   .object({
-    id: z.string().min(1).max(200),
-    name: z.string().trim().min(1).max(200),
-    handle: z.string().max(200).optional(),
+    id: z.string().min(1),
+    name: z.string().trim().min(1),
+    handle: z.string().optional(),
   })
   .strip();
 
@@ -25,7 +25,7 @@ const definer = `CREATE OR REPLACE FUNCTION qm_self_serve_tenant(issuer text, or
     END IF;
     INSERT INTO tenants(settings) VALUES (jsonb_build_object('brandName', $3))
       RETURNING id INTO found;
-    base := left(regexp_replace(lower(coalesce($4, '')), '[^a-z0-9]', '', 'g'), ${APP_HANDLE_MAX});
+    base := left(coalesce($4, ''), ${APP_HANDLE_MAX});
     WHILE base <> '' LOOP
       candidate := CASE WHEN n = 1 THEN base ELSE left(base, ${APP_HANDLE_MAX} - length(n::text)) || n END;
       IF qm_tenant_handle(jsonb_build_object('handle', candidate)) IS NOT DISTINCT FROM candidate THEN
@@ -57,6 +57,12 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
   ],
 };
 
+const handleChar = (c: string): boolean => (c >= "a" && c <= "z") || (c >= "0" && c <= "9");
+
+function handleBase(handle: string | undefined): string {
+  return [...(handle ?? "").toLowerCase()].filter(handleChar).join("");
+}
+
 export async function selfServeTenant(
   pg: Pick<PgPool, "q">,
   issuer: string,
@@ -66,7 +72,7 @@ export async function selfServeTenant(
     issuer,
     org.id,
     org.name,
-    org.handle ?? null,
+    handleBase(org.handle),
   ]);
   const row = rows[0];
   if (typeof row?.tenant !== "string") throw new Error("self-serve tenant was not created");

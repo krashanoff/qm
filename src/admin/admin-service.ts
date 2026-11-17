@@ -156,6 +156,14 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       if ([...known.values()].some((user) => user.offboardedAt !== undefined))
         throw new AdminError(403, "this person was removed from the workspace");
       const at = now();
+      const grant: AdminGrant = {
+        principalId,
+        role: "org_admin",
+        scopeId: scopeId("org", orgId),
+        grantedBy: `trusted-oidc-self-serve:${issuer}`,
+        createdAt: at,
+      };
+      const granted = await grants.addIfAbsent(tenant, grant);
       await opts.users.record({ id: principalId, source: "admin", at });
       if (email)
         await opts.users
@@ -170,14 +178,6 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
             if (!(error instanceof PrincipalLinkError)) throw error;
             console.warn(`[self-serve] email not linked to ${principalId} in ${tenant.id}: ${error.message}`);
           });
-      const grant: AdminGrant = {
-        principalId,
-        role: "org_admin",
-        scopeId: scopeId("org", orgId),
-        grantedBy: `trusted-oidc-self-serve:${issuer}`,
-        createdAt: at,
-      };
-      const granted = await grants.addIfAbsent(tenant, grant);
       return { grant, granted };
     },
     async listGrants(tenant) {

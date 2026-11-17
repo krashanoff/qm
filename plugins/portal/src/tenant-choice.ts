@@ -205,6 +205,7 @@ function orderWorkspaces(tenants: readonly SignInTenant[], recent: readonly stri
 }
 
 const ORG_OPTION = "org:";
+const COOKIE_BYTES_MAX = 4096;
 
 const orgOptions = (orgs: readonly ExternalOrg[]): SignInTenant[] =>
   orgs.map(({ id, name }) => ({ id: `${ORG_OPTION}${id}`, brandName: name }));
@@ -328,10 +329,24 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     email: string | null | undefined,
   ): void {
     const exp = Math.floor(Date.now() / 1000) + deps.ttlS;
-    const choice = { k: "choice", ...who, returnTo, ...(email !== undefined ? { email } : {}), exp };
+    const sealed = (offered: Who) =>
+      seal({ k: "choice", ...offered, returnTo, ...(email !== undefined ? { email } : {}), exp }, deps.key);
+    let cookie = sealed(who);
+    if (who.selfServe) {
+      const orgs = [...who.selfServe.orgs];
+      while (orgs.length > 1 && `portal_tenant_choice=${cookie}`.length > COOKIE_BYTES_MAX) {
+        orgs.pop();
+        cookie = sealed({ ...who, selfServe: { ...who.selfServe, orgs } });
+      }
+      if (orgs.length < who.selfServe.orgs.length)
+        console.warn(
+          `[portal] offering ${orgs.length} of ${who.selfServe.orgs.length} organizations to fit the choice cookie`,
+        );
+      tenants = orgOptions(orgs);
+    }
     res.setHeader("set-cookie", [
       clearCookie("portal_oidc_tmp", "/auth", deps.secureCookies),
-      setCookie("portal_tenant_choice", seal(choice, deps.key), {
+      setCookie("portal_tenant_choice", cookie, {
         path: "/auth",
         maxAge: deps.ttlS,
         secure: deps.secureCookies,

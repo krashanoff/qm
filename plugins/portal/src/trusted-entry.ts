@@ -40,25 +40,24 @@ export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): O
   };
 }
 
-const ORGS_IN_CHOICE_COOKIE = 4;
-const ORG_TEXT_MAX = 200;
-
 function orgText(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const text = value.trim();
-  return text && text.length <= ORG_TEXT_MAX ? text : undefined;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function trustedOrgs(...sources: Record<string, unknown>[]): ExternalOrg[] {
-  const raw = sources.map((source) => source.orgs).find(Array.isArray) as unknown[] | undefined;
+  const raw = (sources.map((source) => source.orgs).find(Array.isArray) as unknown[] | undefined) ?? [];
   const orgs = new Map<string, ExternalOrg>();
-  for (const entry of (raw ?? []).slice(0, ORGS_IN_CHOICE_COOKIE)) {
+  for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
     const { id, name, handle } = entry as Record<string, unknown>;
     const org = { id: orgText(id), name: orgText(name), handle: orgText(handle) };
     if (!org.id || !org.name || orgs.has(org.id)) continue;
     orgs.set(org.id, { id: org.id, name: org.name, ...(org.handle ? { handle: org.handle } : {}) });
   }
+  if (orgs.size < raw.length)
+    console.warn(
+      `[portal] trusted orgs claim: kept ${orgs.size} of ${raw.length} entries (need a unique id and a name)`,
+    );
   return [...orgs.values()];
 }
 
